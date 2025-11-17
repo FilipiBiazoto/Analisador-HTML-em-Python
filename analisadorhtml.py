@@ -2,13 +2,14 @@
 Um renderizador simples de HTML para Tkinter.
 Suporta: <p>, <br>, <b>/<strong>, <i>/<em>, <u>, <h1>-<h6>, <a href>, <ul>, <ol>, <li>, <img src>
 
-Como usar: python tkinter_html_renderer.py
+Como usar: python analisadorhtml.py
 Cole o HTML à esquerda e clique em "Renderizar".
 
 Dependências opcionais:
 - Pillow (para carregar imagens): pip install pillow
 
 Observação: este não é um navegador completo. É uma aproximação para mostrar conteúdo básico.
+
 """
 from html.parser import HTMLParser
 import tkinter as tk
@@ -19,6 +20,8 @@ import io
 
 try:
     from PIL import Image, ImageTk
+    # Definir um filtro de redimensionamento de alta qualidade se Pillow estiver disponível
+    Image.ANTIALIAS = Image.Resampling.LANCZOS # Usar LANCZOS para melhor qualidade
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
@@ -53,10 +56,16 @@ class SimpleHTMLParser(HTMLParser):
             self.href = href
             self.tag_stack.append('link')
         elif tag == 'ul':
+            self.text.insert(tk.END, '\n') # Linha em branco antes da lista
             self.list_stack.append(('ul', None))
         elif tag == 'ol':
+            self.text.insert(tk.END, '\n') # Linha em branco antes da lista
             self.list_stack.append(('ol', 1))
         elif tag == 'li':
+            # Inserir quebra de linha antes de cada item de lista, exceto o primeiro
+            if self.text.index(tk.END) != '1.0' and self.text.get(f'{self.text.index(tk.END)} -1c') != '\n':
+                self.text.insert(tk.END, '\n')
+                
             if not self.list_stack:
                 marker = '\u2022 '  
             else:
@@ -79,17 +88,20 @@ class SimpleHTMLParser(HTMLParser):
                 'b':'bold','strong':'bold','i':'italic','em':'italic','u':'underline','p':'p','li':'li'
             }
             style = style_map.get(tag)
+            # Remove a tag correspondente da pilha
             for i in range(len(self.tag_stack)-1, -1, -1):
                 if self.tag_stack[i] == style:
                     del self.tag_stack[i]
                     break
         elif tag in ('h1','h2','h3','h4','h5','h6'):
+            # Remove a tag de cabeçalho da pilha
             for i in range(len(self.tag_stack)-1, -1, -1):
                 if self.tag_stack[i] == tag:
                     del self.tag_stack[i]
                     break
             self.text.insert(tk.END, '\n')
         elif tag == 'a':
+            # Remove a tag 'link' da pilha
             for i in range(len(self.tag_stack)-1, -1, -1):
                 if self.tag_stack[i] == 'link':
                     del self.tag_stack[i]
@@ -98,12 +110,34 @@ class SimpleHTMLParser(HTMLParser):
         elif tag in ('ul','ol'):
             if self.list_stack:
                 self.list_stack.pop()
+            self.text.insert(tk.END, '\n') # Linha em branco depois da lista
 
     def handle_data(self, data):
+        # A lógica de HTMLParser pode dividir o texto em pedaços.
+        # Para preservar o espaçamento, vamos inserir o 'data' original,
+        # mas remover espaços em branco iniciais/finais se já houver um espaço ou quebra de linha.
+        
         if not data:
             return
+
+        # Normalizar múltiplos espaços em branco para um único espaço
+        normalized_data = ' '.join(data.split())
+        if not normalized_data:
+            return
+
+        # Tenta evitar espaços duplicados no início
+        if self.text.index(tk.END) != '1.0':
+            last_char = self.text.get(f'{self.text.index(tk.END)} -1c')
+            if last_char not in ('\n', ' ') and data.startswith(' '):
+                # Se o último caractere não for espaço/quebra de linha e o novo dado começar com espaço,
+                # adicionamos um espaço antes do texto normalizado.
+                normalized_data = ' ' + normalized_data
+            elif last_char == ' ' and data.startswith(' '):
+                # Se o último caractere for espaço e o novo dado começar com espaço, removemos o espaço inicial.
+                normalized_data = normalized_data.lstrip()
+        
         start_index = self.text.index(tk.END)
-        self.text.insert(tk.END, data)
+        self.text.insert(tk.END, normalized_data)
         end_index = self.text.index(tk.END)
 
         for t in self.tag_stack:
@@ -118,30 +152,37 @@ class SimpleHTMLParser(HTMLParser):
             elif t == 'underline':
                 self.text.tag_add('underline', start_index, end_index)
             elif t == 'link' and self.href:
-              
+                # Cria uma tag única para o link
                 tag_name = f'link_{start_index.replace(".","_")}'
                 self.text.tag_add(tag_name, start_index, end_index)
-                self.text.tag_bind(tag_name, '<Button-1>', lambda e, url=self.href: webbrowser.open(url))
-                self.text.tag_config(tag_name, foreground='blue', underline=1)
+                
+                # Cria uma função wrapper para o evento de clique
+                def open_link(event, url=self.href):
+                    webbrowser.open(url)
+                
+                self.text.tag_bind(tag_name, '<Button-1>', open_link)
+                self.text.tag_config(tag_name, foreground='#0078D7', underline=1) # Cor azul moderna
 
     def _insert_image(self, src):
         try:
             if src.startswith('http://') or src.startswith('https://'):
-               
                 raise ValueError('Carregamento por URL não suportado neste demo. Use caminho local.')
             
             if PIL_AVAILABLE:
                 img = Image.open(src)
-               
+                # Redimensionamento para caber na área de visualização
                 maxw, maxh = 400, 400
                 w, h = img.size
                 ratio = min(1, maxw/w, maxh/h)
                 if ratio < 1:
-                    img = img.resize((int(w*ratio), int(h*ratio)), Image.ANTIALIAS)
+                    # Usar o filtro de alta qualidade definido no início
+                    img = img.resize((int(w*ratio), int(h*ratio)))
                 photo = ImageTk.PhotoImage(img)
             else:
-               
+                # Fallback para tk.PhotoImage (suporta menos formatos)
                 photo = tk.PhotoImage(file=src)
+            
+            # Manter uma referência para evitar que o garbage collector a remova
             self.image_refs.append(photo)
             self.text.image_create(tk.END, image=photo)
             self.text.insert(tk.END, '\n')
@@ -153,72 +194,180 @@ class HTMLViewer(tk.Frame):
         super().__init__(master)
         self.master = master
         self.pack(fill=tk.BOTH, expand=True)
+        self._apply_style()
         self._build_ui()
 
+    def _apply_style(self):
+        # Tenta aplicar um tema moderno se disponível
+        style = ttk.Style()
+        available_themes = style.theme_names()
+        
+        # Preferir 'clam' ou 'alt' para um visual mais limpo que o padrão 'classic'
+        if 'clam' in available_themes:
+            style.theme_use('clam')
+        elif 'alt' in available_themes:
+            style.theme_use('alt')
+        
+        # Configurações de estilo para o Text Widget (que não é um widget ttk)
+        self.text_bg = '#FFFFFF' # Fundo branco
+        self.text_fg = '#333333' # Texto cinza escuro para melhor leitura
+        self.font_family = 'Segoe UI' if 'Segoe UI' in font.families() else 'Helvetica'
+        self.font_size = 11
+        
+        # Estilo para os botões
+        style.configure('TButton', font=(self.font_family, self.font_size, 'bold'), padding=6)
+        style.map('TButton', background=[('active', '#E1E1E1')])
+        
+        # Estilo para os Labels
+        style.configure('TLabel', font=(self.font_family, self.font_size, 'bold'), foreground='#333333')
+
     def _build_ui(self):
-        self.master.title('Renderizador HTML simples (Tkinter)')
+        self.master.title('Renderizador HTML Simples (Tkinter) - Visualização Aprimorada')
+        self.master.geometry('1200x800') # Aumentar o tamanho inicial da janela
+        
+        # Configurar o grid principal para expansão
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
+        # Usar Panedwindow para redimensionamento flexível
         paned = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True)
+        paned.grid(row=0, column=0, sticky='nsew', padx=10, pady=10) # Adicionar padding externo
 
-        left = ttk.Frame(paned)
-        right = ttk.Frame(paned)
+        # Frame da Esquerda (Entrada HTML)
+        left = ttk.Frame(paned, padding="10 10 5 10")
         paned.add(left, weight=1)
-        paned.add(right, weight=2)
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(1, weight=1)
 
-        lbl = ttk.Label(left, text='HTML de entrada:')
-        lbl.pack(anchor='nw', padx=6, pady=6)
-        self.input_text = tk.Text(left, width=60, height=30)
-        self.input_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0,6))
+        lbl = ttk.Label(left, text='HTML de Entrada:', style='TLabel')
+        lbl.grid(row=0, column=0, sticky='nw', pady=(0, 5))
+        
+        # Adicionar Scrollbar ao Text Widget de entrada
+        input_frame = ttk.Frame(left)
+        input_frame.grid(row=1, column=0, sticky='nsew', pady=(0, 10))
+        input_frame.columnconfigure(0, weight=1)
+        input_frame.rowconfigure(0, weight=1)
+        
+        input_scroll = ttk.Scrollbar(input_frame)
+        input_scroll.grid(row=0, column=1, sticky='ns')
+        
+        self.input_text = tk.Text(input_frame, 
+                                  wrap='word', 
+                                  font=(self.font_family, self.font_size), 
+                                  bg=self.text_bg, 
+                                  fg=self.text_fg, 
+                                  yscrollcommand=input_scroll.set,
+                                  relief=tk.FLAT, # Remover borda padrão
+                                  padx=5, pady=5)
+        self.input_text.grid(row=0, column=0, sticky='nsew')
+        input_scroll.config(command=self.input_text.yview)
 
+        # Frame dos Botões
         btn_frame = ttk.Frame(left)
-        btn_frame.pack(fill=tk.X, padx=6, pady=(0,6))
-        render_btn = ttk.Button(btn_frame, text='Renderizar', command=self.render_html)
+        btn_frame.grid(row=2, column=0, sticky='ew', pady=(0, 5))
+        
+        render_btn = ttk.Button(btn_frame, text='Renderizar', command=self.render_html, style='TButton')
         render_btn.pack(side=tk.LEFT)
-        clear_btn = ttk.Button(btn_frame, text='Limpar saída', command=self.clear_output)
-        clear_btn.pack(side=tk.LEFT, padx=6)
+        
+        clear_btn = ttk.Button(btn_frame, text='Limpar Saída', command=self.clear_output, style='TButton')
+        clear_btn.pack(side=tk.LEFT, padx=10)
 
-        lbl2 = ttk.Label(right, text='Visualização:')
-        lbl2.pack(anchor='nw', padx=6, pady=6)
+        # Frame da Direita (Visualização)
+        right = ttk.Frame(paned, padding="10 10 10 10")
+        paned.add(right, weight=2)
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
 
-        self.output_text = tk.Text(right, wrap='word')
-        self.output_text.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0,6))
+        lbl2 = ttk.Label(right, text='Visualização:', style='TLabel')
+        lbl2.grid(row=0, column=0, sticky='nw', pady=(0, 5))
 
-        default_font = font.nametofont('TkDefaultFont')
-        self.output_text.tag_config('bold', font=(default_font.actual('family'), default_font.actual('size'), 'bold'))
-        self.output_text.tag_config('italic', font=(default_font.actual('family'), default_font.actual('size'), 'italic'))
+        # Adicionar Scrollbar ao Text Widget de saída
+        output_frame = ttk.Frame(right)
+        output_frame.grid(row=1, column=0, sticky='nsew')
+        output_frame.columnconfigure(0, weight=1)
+        output_frame.rowconfigure(0, weight=1)
+        
+        output_scroll = ttk.Scrollbar(output_frame)
+        output_scroll.grid(row=0, column=1, sticky='ns')
+        
+        self.output_text = tk.Text(output_frame, 
+                                   wrap='word', 
+                                   font=(self.font_family, self.font_size), 
+                                   bg=self.text_bg, 
+                                   fg=self.text_fg, 
+                                   yscrollcommand=output_scroll.set,
+                                   relief=tk.FLAT, # Remover borda padrão
+                                   padx=10, pady=10) # Aumentar padding interno para melhor visualização
+        self.output_text.grid(row=0, column=0, sticky='nsew')
+        output_scroll.config(command=self.output_text.yview)
+        
+        # Configuração das Tags de Estilo
+        
+        # Estilos básicos
+        self.output_text.tag_config('bold', font=(self.font_family, self.font_size, 'bold'))
+        self.output_text.tag_config('italic', font=(self.font_family, self.font_size, 'italic'))
         self.output_text.tag_config('underline', underline=1)
 
-        base_family = default_font.actual('family')
-        self.output_text.tag_config('h1', font=(base_family, 22, 'bold'))
-        self.output_text.tag_config('h2', font=(base_family, 18, 'bold'))
-        self.output_text.tag_config('h3', font=(base_family, 16, 'bold'))
-        self.output_text.tag_config('h4', font=(base_family, 14, 'bold'))
-        self.output_text.tag_config('h5', font=(base_family, 12, 'bold'))
-        self.output_text.tag_config('h6', font=(base_family, 10, 'bold'))
+        # Estilos de cabeçalho
+        base_family = self.font_family
+        self.output_text.tag_config('h1', font=(base_family, 24, 'bold'), spacing3=10) # spacing3 adiciona espaço após o parágrafo
+        self.output_text.tag_config('h2', font=(base_family, 18, 'bold'), spacing3=8)
+        self.output_text.tag_config('h3', font=(base_family, 14, 'bold'), spacing3=6)
+        self.output_text.tag_config('h4', font=(base_family, 12, 'bold'), spacing3=4)
+        self.output_text.tag_config('h5', font=(base_family, 11, 'bold'), spacing3=2)
+        self.output_text.tag_config('h6', font=(base_family, 10, 'bold'), spacing3=2)
+        
+        # Estilo para parágrafo (adicionar um pouco de espaço)
+        self.output_text.tag_config('p', spacing3=5)
 
     def clear_output(self):
         self.output_text.delete('1.0', tk.END)
+        # Limpar referências de imagem para liberar memória
+        parser = getattr(self, 'last_parser', None)
+        if parser:
+            parser.image_refs = []
 
     def render_html(self):
         html = self.input_text.get('1.0', tk.END)
         self.clear_output()
+        # Cria e armazena o parser para manter as referências de imagem
         parser = SimpleHTMLParser(self.output_text)
+        self.last_parser = parser
         parser.feed(html)
         parser.close()
 
 def main():
     root = tk.Tk()
-    root.geometry('1000x700')
+    # Configurar o estilo da janela principal para um visual mais moderno
+    root.option_add('*tearOff', tk.FALSE) # Desabilitar menus destacáveis
+    
     app = HTMLViewer(master=root)
-    sample = '''<h1>Exemplo</h1>
-<p>Este é um <b>texto em negrito</b>, <i>itálico</i> e um <a href="https://www.python.org">link para Python</a>.</p>
-<p>Lista:</p>
-<ul><li>Item 1</li><li>Item 2</li></ul>
+    
+    # Exemplo de HTML mais completo
+    sample = '''<h1>Exemplo de Renderização HTML</h1>
+<p>Este é um <b>texto em negrito</b>, <i>itálico</i> e <u>sublinhado</u>.
+<br>Aqui está uma quebra de linha.</p>
+<h2>Lista de Tecnologias</h2>
+<p>Lista não ordenada:</p>
+<ul>
+    <li>Item 1: Python</li>
+    <br>
+    <li>Item 2: Tkinter</li>
+    <br>
+    <li>Item 3: <a href="https://www.python.org">Link para Python</a></li>
+</ul>
+<p>Lista ordenada:</p>
+<ol>
+    <li>Primeiro passo</li>
+    <br>
+    <li>Segundo passo</li>
+    <br>
+    <li>Terceiro passo</li>
+</ol>
+<h3>Imagem Local</h3>
 <p>Imagem local (se existir):</p>
-<img src="example.png">
+<br><br>
+<img src="foto.png">
 '''
     app.input_text.insert('1.0', sample)
     root.mainloop()
