@@ -10,13 +10,27 @@ Dependências opcionais:
 
 Observação: este não é um navegador completo. É uma aproximação para mostrar conteúdo básico.
 
-"""
+""" 
+# — Docstring no topo do arquivo explicando o propósito do script e instruções de uso.
+
 from html.parser import HTMLParser
+# — Importa a classe HTMLParser da biblioteca padrão para analisar HTML simples.
+
 import tkinter as tk
+# — Importa tkinter com o alias 'tk' para construção da interface gráfica.
+
 from tkinter import ttk
+# — Importa ttk (widgets temáticos do tkinter) para controles com aparência moderna.
+
 from tkinter import font
+# — Importa o módulo font do tkinter para consultar e definir fontes.
+
 import webbrowser
+# — Importa webbrowser para abrir links (URLs) no navegador do usuário.
+
 import io
+# — Importa io (não usado no código atual — pode ser utilidade futura para buffers de imagem/texto).
+#    (Observação: io está importado mas não utilizado explicitamente no código.)
 
 try:
     from PIL import Image, ImageTk
@@ -25,6 +39,10 @@ try:
     PIL_AVAILABLE = True
 except Exception:
     PIL_AVAILABLE = False
+# — Tenta importar Pillow (PIL). Se disponível, define um filtro de redimensionamento de alta qualidade
+#    (LANCZOS) e marca PIL_AVAILABLE True; caso contrário, marca False.
+#    Observação: atribuir Image.ANTIALIAS pode ser redundante em versões mais recentes do Pillow,
+#    mas aqui força um alias para usar Resampling.LANCZOS.
 
 class SimpleHTMLParser(HTMLParser):
     def __init__(self, text_widget):
@@ -34,6 +52,12 @@ class SimpleHTMLParser(HTMLParser):
         self.list_stack = []
         self.href = None
         self.image_refs = []  
+    # — Classe que estende HTMLParser para transformar elementos HTML em conteúdo dentro de um Text widget.
+    #    __init__: recebe o Text widget onde o conteúdo será inserido e inicializa estruturas auxiliares:
+    #    - tag_stack: pilha para rastrear estilos/elementos abertos (negrito, itálico, cabeçalho, etc.)
+    #    - list_stack: pilha para rastrear listas aninhadas (ul/ol) e índices de ol
+    #    - href: URL atual quando dentro de <a>
+    #    - image_refs: lista para manter referências das imagens (evitar coleta pelo GC)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -81,6 +105,17 @@ class SimpleHTMLParser(HTMLParser):
             src = attrs.get('src')
             if src:
                 self._insert_image(src)
+    # — handle_starttag: chamado quando um tag de abertura é encontrado.
+    #    - Converte attrs para dict.
+    #    - Para tags de estilo (b, i, u) empilha um marcador na tag_stack.
+    #    - Para cabeçalhos empilha o nome do tag (h1..h6) e insere uma quebra de linha antes.
+    #    - <br> insere quebra de linha.
+    #    - <p> insere quebra de linha e empilha 'p' (p pode aplicar espaçamento depois).
+    #    - <a> guarda href em self.href e empilha 'link'.
+    #    - <ul>/<ol> inserem linha em branco e empilham na list_stack; ol começa com índice 1.
+    #    - <li> prepara marcador (bullet ou número), insere quebra de linha quando apropriado, insere o marcador
+    #      e empilha 'li'.
+    #    - <img>: obtém src e chama método de inserção de imagem se src presente.
 
     def handle_endtag(self, tag):
         if tag in ('b','strong','i','em','u','p','li'):
@@ -111,6 +146,11 @@ class SimpleHTMLParser(HTMLParser):
             if self.list_stack:
                 self.list_stack.pop()
             self.text.insert(tk.END, '\n') # Linha em branco depois da lista
+    # — handle_endtag: chamado quando encontra um fechamento de tag.
+    #    - Para tags de estilo e estrutura, procura na pilha a entrada correspondente e remove (do fim para o início).
+    #    - Para cabeçalhos, remove o marcador e insere uma quebra de linha após o cabeçalho.
+    #    - Para 'a', remove a tag 'link' e zera self.href.
+    #    - Para listas, desempilha list_stack e adiciona linha em branco após a lista.
 
     def handle_data(self, data):
         # A lógica de HTMLParser pode dividir o texto em pedaços.
@@ -162,6 +202,16 @@ class SimpleHTMLParser(HTMLParser):
                 
                 self.text.tag_bind(tag_name, '<Button-1>', open_link)
                 self.text.tag_config(tag_name, foreground='#0078D7', underline=1) # Cor azul moderna
+    # — handle_data: chamado para cada trecho de texto entre tags.
+    #    - Normaliza espaços (colapsa múltiplos espaços em um único).
+    #    - Previne duplicação de espaços dependendo do último caractere no Text widget.
+    #    - Insere o texto no widget de saída e recupera índices iniciais e finais para aplicar tags de estilo.
+    #    - Para cada marcador em tag_stack aplica a tag correspondente no intervalo inserido.
+    #    - Para links (<a href>): cria uma tag única (para evitar conflitos) que:
+    #         * associa um evento de clique para abrir URL no navegador,
+    #         * configura estilo visual (cor e sublinhado).
+    #    Observação: usar closures aqui captura self.href atual; como estamos criando tag por trecho,
+    #    passamos url=self.href como default para fixar o valor naquele momento.
 
     def _insert_image(self, src):
         try:
@@ -188,6 +238,14 @@ class SimpleHTMLParser(HTMLParser):
             self.text.insert(tk.END, '\n')
         except Exception as e:
             self.text.insert(tk.END, f'[Erro ao carregar imagem: {e}]\n')
+    # — _insert_image: método auxiliar para inserir imagem local no Text widget.
+    #    - Rejeita URLs remotos (levanta ValueError).
+    #    - Se Pillow disponível: abre imagem, calcula ratio para limitar dentro de maxw/maxh,
+    #      redimensiona com filtro de alta qualidade, converte para ImageTk.PhotoImage.
+    #    - Se Pillow ausente: usa tk.PhotoImage (suporta GIF/PNG limitados).
+    #    - Armazena referência em self.image_refs para evitar coleta pelo GC.
+    #    - Insere a imagem no Text widget com image_create e adiciona quebra de linha após.
+    #    - Em caso de erro insere uma mensagem de erro no Text widget.
 
 class HTMLViewer(tk.Frame):
     def __init__(self, master=None):
@@ -196,6 +254,9 @@ class HTMLViewer(tk.Frame):
         self.pack(fill=tk.BOTH, expand=True)
         self._apply_style()
         self._build_ui()
+    # — Classe que representa a interface gráfica do renderizador.
+    #    __init__: configura o frame principal, empacota para preencher a janela e chama métodos
+    #    para aplicar estilo e construir a interface.
 
     def _apply_style(self):
         # Tenta aplicar um tema moderno se disponível
@@ -220,6 +281,9 @@ class HTMLViewer(tk.Frame):
         
         # Estilo para os Labels
         style.configure('TLabel', font=(self.font_family, self.font_size, 'bold'), foreground='#333333')
+    # — _apply_style: busca aplicar tema ttk preferencialmente 'clam' ou 'alt',
+    #    define cores, fonte e estilos de botão/label. Seleciona 'Segoe UI' se disponível,
+    #    senão usa 'Helvetica'. Define tamanhos e mapeamento visual para botões e labels.
 
     def _build_ui(self):
         self.master.title('Renderizador HTML Simples (Tkinter) - Visualização Aprimorada')
@@ -261,6 +325,10 @@ class HTMLViewer(tk.Frame):
                                   padx=5, pady=5)
         self.input_text.grid(row=0, column=0, sticky='nsew')
         input_scroll.config(command=self.input_text.yview)
+    # — Bloco que constrói a coluna esquerda da janela:
+    #    - Título 'HTML de Entrada'
+    #    - Frame com Text widget para inserir/colar HTML e scrollbar vertical associada.
+    #    - Configurações do Text: wrap='word', fonte definida, cores, sem borda e padding interno.
 
         # Frame dos Botões
         btn_frame = ttk.Frame(left)
@@ -271,6 +339,9 @@ class HTMLViewer(tk.Frame):
         
         clear_btn = ttk.Button(btn_frame, text='Limpar Saída', command=self.clear_output, style='TButton')
         clear_btn.pack(side=tk.LEFT, padx=10)
+    # — Bloco de botões abaixo do Text de entrada:
+    #    - Botão 'Renderizar' chama self.render_html
+    #    - Botão 'Limpar Saída' chama self.clear_output
 
         # Frame da Direita (Visualização)
         right = ttk.Frame(paned, padding="10 10 10 10")
@@ -300,7 +371,11 @@ class HTMLViewer(tk.Frame):
                                    padx=10, pady=10) # Aumentar padding interno para melhor visualização
         self.output_text.grid(row=0, column=0, sticky='nsew')
         output_scroll.config(command=self.output_text.yview)
-        
+    # — Bloco que constrói a coluna direita (visualização):
+    #    - Label 'Visualização'
+    #    - Text widget de saída com scrollbar ligada, padding maior para leitura.
+    #    - PanedWindow configurada com weight maior para a direita (mais espaço).
+
         # Configuração das Tags de Estilo
         
         # Estilos básicos
@@ -319,6 +394,11 @@ class HTMLViewer(tk.Frame):
         
         # Estilo para parágrafo (adicionar um pouco de espaço)
         self.output_text.tag_config('p', spacing3=5)
+    # — Define as tags (estilos) que serão aplicadas no Text de saída:
+    #    - 'bold', 'italic', 'underline' para estilos inline.
+    #    - 'h1'..'h6' com tamanhos e espaçamento posterior (spacing3).
+    #    - 'p' apenas com espaçamento após.
+    #    Observação: o Text widget aplica estilos por tags; as tags são adicionadas durante a análise.
 
     def clear_output(self):
         self.output_text.delete('1.0', tk.END)
@@ -326,6 +406,8 @@ class HTMLViewer(tk.Frame):
         parser = getattr(self, 'last_parser', None)
         if parser:
             parser.image_refs = []
+    # — clear_output: apaga todo conteúdo do Text de saída e limpa referências de imagens
+    #    do último parser armazenado (ajuda a liberar memória).
 
     def render_html(self):
         html = self.input_text.get('1.0', tk.END)
@@ -335,6 +417,11 @@ class HTMLViewer(tk.Frame):
         self.last_parser = parser
         parser.feed(html)
         parser.close()
+    # — render_html: chamado ao clicar em "Renderizar".
+    #    - Lê todo o conteúdo do Text de entrada,
+    #    - Limpa saída anterior,
+    #    - Cria um SimpleHTMLParser ligado ao Text de saída, armazena em self.last_parser,
+    #    - Alimenta (feed) o parser com o HTML e fecha o parser.
 
 def main():
     root = tk.Tk()
@@ -371,6 +458,10 @@ def main():
 '''
     app.input_text.insert('1.0', sample)
     root.mainloop()
+# — main(): cria a janela root Tk, define uma opção (desabilita menus "tearOff"),
+#    instancia HTMLViewer com master=root, injeta um exemplo de HTML na área de entrada
+#    (sample) para demonstração, e inicia o loop principal com root.mainloop().
 
 if __name__ == '__main__':
     main()
+# — Padrão Python para executar main() somente quando o script for executado diretamente.
